@@ -37,6 +37,7 @@ def puredp_to_fdp(eps):
         return np.max(np.array([0, 1-np.exp(eps)*fpr, np.exp(-eps)*(1-fpr)]))
     return fdp
 
+
 def puredp_to_approxdp(eps):
     # Convert pureDP to approx dp
     # Page 3 of https://eprint.iacr.org/2018/277.pdf
@@ -44,6 +45,51 @@ def puredp_to_approxdp(eps):
         s,mag = utils.stable_log_diff_exp(eps, np.log(delta))
         return mag
     return approxdp
+
+
+def rdp_to_delta(rdp):
+    """
+    from RDP to delta with a fixed epsilon
+    """
+
+
+    def approx_delta(eps):
+        """
+        approximate delta as a function of epsilon
+        """
+
+        def get_eps(delta):
+            if delta == 0:
+                return rdp(np.inf)
+            else:
+                def fun(x):  # the input the RDP's \alpha
+                    if x <= 1:
+                        return np.inf
+                    else:
+                        return np.log(1 / delta) / (x - 1) + rdp(x)
+
+                results = minimize_scalar(fun, method='Brent', bracket=(1, 2), bounds=[1, 100000])
+                if results.success:
+                    return results.fun
+                else:
+                    return np.inf
+
+
+        def err(delta):
+            current_eps = get_eps(delta)
+            print('current delta', delta, 'eps', current_eps)
+            return abs(eps - current_eps)
+
+        results = minimize_scalar(err, method='bounded', bounds=[0, 1],options={'xatol':1e-14})
+        if results.success and results.fun < 1e-3:
+            print('results', results.x)
+            return results.x
+        else:
+            print('not found')
+            return 1
+
+
+    return approx_delta
 
 def rdp_to_approxdp(rdp, alpha_max=np.inf, BBGHS_conversion=True):
     # from RDP to approx DP
@@ -336,7 +382,7 @@ def single_rdp_to_fdp_and_fdp_grad_log(alpha, rho):
 
         # there are two roots, we care about the roots smaller than 1-x
         results = minimize_scalar(normal_equation, bounds=[logx,0], method='bounded',
-                                  options={'xatol':1e-8})
+                                  options={'xatol':1e-6})
         if results.success:
             return results.x
         else:
@@ -702,6 +748,142 @@ def fdp_fdp_grad_to_approxdp(fdp, fdp_grad, log_flag = False):
 
 
 
+
+
+def old_cdf_to_approxdp_nosym(cdf_p,cdf_q,take_log = True):
+    """
+    when cdf is not symtric 
+    """
+    def trade_off(x):
+        #x is e^epsilon
+        if take_log:
+            #print('take log input e^eps', x)
+            log_e = np.log(x)
+            print('current eps', log_e)
+            result = cdf_p(log_e) + x*cdf_q(-log_e)
+            print('current delta', 1-result)
+            return result
+    exp_eps = numerical_inverse(trade_off, [0, 1])
+    def approxdp(delta):
+        print('required delta', delta)
+        return np.log(exp_eps(1 - delta))
+    return approxdp
+
+def cdf_to_approxdelta_nosym(cdf_p, cdf_q):
+    """
+    when epsilon is fixed, return delta
+    cdf_p and cdf_q is not the same
+    """
+    def approx_delta(eps):
+
+
+        # print('current eps', log_e)
+
+        delta = 1-cdf_p(eps) - np.exp(eps) * cdf_q(-eps)
+        return delta
+    return approx_delta
+def cdf_to_approxdp_nosym(cdf_p,cdf_q,take_log = True):
+    """
+    when cdf is not symtric
+    """
+
+    def trade_off(threshold):
+        left = 0
+        right = 10 # the range of e^epsilon
+        mid = 5
+        while left<right and (right-left>1e-4):
+            cur_value = cdf_p(np.log(mid)) + mid * cdf_q(-np.log(mid))
+            if np.abs(cur_value - threshold) < 1e-6:
+                return mid
+            if (right-left<=1e-4):
+                return mid
+            print('current delta', 1-cur_value)
+            if 1-cur_value > threshold:
+                left = mid
+            else:
+                right = mid
+
+            mid = (right + left)*1./2
+            print('current search epsilon', np.log(mid))
+            print('left', left, 'right', right)
+        return mid
+
+    def approxdp(delta):
+        print('required delta', delta)
+        return np.log(trade_off(delta))
+    return approxdp
+
+
+def cdf_to_approxdelta(cdf):
+    """
+    when epsilon is fixed, return delta
+    """
+    def approx_delta(eps):
+
+
+        # print('current eps', log_e)
+
+        delta = 1-cdf(eps) - np.exp(eps) * cdf(-eps)
+        return delta
+    return approx_delta
+def old_cdf_to_approxdp(cdf, take_log=True):
+    """
+    given cdf function, output (epsilon, delta)
+    when take_log is true, the cdf is for log(p/q)
+    when take_log is false, the cdf is for p/q
+    """
+    def trade_off(x):
+        #x is e^epsilon
+
+        if take_log:
+            #print('take log input e^eps', x)
+            log_e = np.log(x)
+            #print('current eps', log_e)
+
+            cur = cdf(log_e) + x*cdf(-log_e)
+            print('current delta', 1-cur)
+        else:
+            return cdf(x) + x*cdf(1.0/x)
+    exp_eps = numerical_inverse(trade_off, [0, 1])
+
+    def approxdp(delta):
+        return np.log(exp_eps(1 - delta))
+
+
+    return approxdp
+
+def cdf_to_approxdp(cdf, take_log=True):
+    """
+    given cdf function, output (epsilon, delta)
+    when take_log is true, the cdf is for log(p/q)
+    when take_log is false, the cdf is for p/q
+    """
+    def trade_off(threshold):
+        left = 0
+        right = 1e12 # the range of e^epsilon
+        mid = 0
+        while left<right and (right-left>1e-4):
+            cur_value = cdf(np.log(mid)) + mid * cdf(-np.log(mid))
+            if np.abs(cur_value - threshold) < 1e-6:
+                return mid
+            print('current delta', 1-cur_value)
+            if 1-cur_value > threshold:
+                right = mid
+            else:
+                left = mid
+
+            mid = (right + left)*1./2
+            print('current search epsilon', np.log(mid))
+            print('left', left, 'right', right)
+
+
+        print('no solution found', 'current 1-delta',cur_value, 'required 1-delta',threshold)
+
+    def approxdp(delta):
+        return np.log(trade_off(delta))
+
+
+    return approxdp
 def fdp_to_approxdp(fdp):
     # Check out Proposition 2.12 of Dong, Roth and Su
     # if given a symmetric fdp function f,
@@ -748,7 +930,7 @@ def numerical_inverse(f, bounds=None):
         def normal_equation(x):
             return abs(fun(x))
 
-        results = minimize_scalar(normal_equation, bounds=[1,np.inf], bracket=[1,2])
+        results = minimize_scalar(normal_equation, bounds=[1,np.inf], bracket=[1,2], tol=1e-6)
 
 
         #results = root_scalar(fun, options={'disp': False})
